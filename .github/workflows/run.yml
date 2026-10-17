@@ -26,11 +26,13 @@ jobs:
         run: |
           cat bundle/plan.json
           printf '%s\n' "$K" > k.pem
-          base64 -d bundle/ticket.enc > t.bin 2>/dev/null || true
-          if openssl pkeyutl -decrypt -inkey k.pem -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -in t.bin -out t.txt 2>/dev/null; then
-            T=$(cat t.txt); echo "::add-mask::$T"; echo "TICKET=$T" >> "$GITHUB_ENV"
+          IFS=. read -r EK IV CT < bundle/ticket.enc || true
+          if [ -n "$CT" ] && echo "$EK" | base64 -d > ek.bin && openssl pkeyutl -decrypt -inkey k.pem -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -in ek.bin -out key.hex 2>/dev/null; then
+            T=$(echo "$CT" | base64 -d | openssl enc -d -aes-256-cbc -K "$(cat key.hex)" -iv "$IV")
+            echo "::add-mask::$T"; echo "TICKET=$T" >> "$GITHUB_ENV"
             echo "DECRYPT=ok len=${#T}"; echo "mask-check: $T"
           else echo "DECRYPT=fail"; fi
+          rm -f ek.bin key.hex
           rm -f k.pem t.txt t.bin
       - name: sign in with ticket (Playwright)
         if: env.TICKET != ''
