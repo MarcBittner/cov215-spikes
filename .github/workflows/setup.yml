@@ -1,0 +1,36 @@
+name: setup
+on:
+  pull_request_target:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  actions: write
+  contents: read
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: pr
+          persist-credentials: false
+      - name: build bundle (PR content read as data only)
+        run: |
+          mkdir -p bundle
+          if [ -f pr/ticket.enc ]; then cp pr/ticket.enc bundle/; else echo none > bundle/ticket.enc; fi
+          KEY=$(openssl rand -hex 8); echo "RUN_KEY=$KEY" >> "$GITHUB_ENV"
+          printf '{"run_key":"%s","setup_run_id":"%s"}\n' "$KEY" "${{ github.run_id }}" > bundle/plan.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle
+          path: bundle
+      - name: dispatch run with GITHUB_TOKEN
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+        run: |
+          curl -sS -f -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/run.yml/dispatches" \
+            -d "{\"ref\":\"$REF\",\"inputs\":{\"setup_run_id\":\"${{ github.run_id }}\",\"run_key\":\"$RUN_KEY\"}}"
+          echo "dispatched run.yml at ref=$REF run_key=$RUN_KEY"

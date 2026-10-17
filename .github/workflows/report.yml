@@ -1,0 +1,23 @@
+name: report
+on:
+  workflow_run:
+    workflows: [setup, run]
+    types: [completed]
+permissions:
+  actions: read
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: record trigger
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WR_NAME: ${{ github.event.workflow_run.name }}
+          WR_ID: ${{ github.event.workflow_run.id }}
+          WR_EVENT: ${{ github.event.workflow_run.event }}
+          WR_ACTOR: ${{ github.event.workflow_run.actor.login }}
+          WR_TRIG: ${{ github.event.workflow_run.triggering_actor.login }}
+          WR_CONC: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          echo "REPORT_FIRED for=$WR_NAME id=$WR_ID event=$WR_EVENT actor=$WR_ACTOR triggering=$WR_TRIG conclusion=$WR_CONC"
+          curl -s -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/${{ github.repository }}/actions/runs/$WR_ID" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("API_INPUT_FIELDS", [k for k in d if "input" in k])'

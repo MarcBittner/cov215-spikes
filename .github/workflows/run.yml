@@ -1,0 +1,59 @@
+name: run
+run-name: run ${{ inputs.run_key }}
+on:
+  workflow_dispatch:
+    inputs:
+      setup_run_id:
+        required: true
+      run_key:
+        required: true
+permissions:
+  actions: read
+  contents: read
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundle
+          path: bundle
+          run-id: ${{ inputs.setup_run_id }}
+          github-token: ${{ github.token }}
+      - name: decrypt ticket
+        env:
+          K: ${{ secrets.E2E_TICKET_KEY }}
+        run: |
+          cat bundle/plan.json
+          printf '%s\n' "$K" > k.pem
+          base64 -d bundle/ticket.enc > t.bin 2>/dev/null || true
+          if openssl pkeyutl -decrypt -inkey k.pem -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -in t.bin -out t.txt 2>/dev/null; then
+            T=$(cat t.txt); echo "::add-mask::$T"; echo "TICKET=$T" >> "$GITHUB_ENV"
+            echo "DECRYPT=ok len=${#T}"; echo "mask-check: $T"
+          else echo "DECRYPT=fail"; fi
+          rm -f k.pem t.txt t.bin
+      - name: sign in with ticket (Playwright)
+        if: env.TICKET != ''
+        env:
+          BASE: ${{ vars.PREVIEW_URL }}
+        run: |
+          npm init -y >/dev/null && npm i -s playwright@1.61.1 >/dev/null 2>&1 && npx playwright install --with-deps chromium >/dev/null 2>&1
+          cat > s.mjs <<'JS'
+          import { chromium } from 'playwright';
+          const b = await chromium.launch();
+          const url = `${process.env.BASE}/sign-in?__clerk_ticket=${process.env.TICKET}`;
+          async function attempt(label) {
+            const c = await b.newContext(); const p = await c.newPage();
+            await p.goto(url, { waitUntil: 'domcontentloaded' });
+            let ok = false;
+            for (let i = 0; i < 30; i++) { await p.waitForTimeout(1000); if (!new URL(p.url()).pathname.startsWith('/sign-in')) { ok = true; break; } }
+            const cookies = (await c.cookies()).map(x => x.name);
+            console.log(`${label}: signed_in=${ok} final_path=${new URL(p.url()).pathname} session_cookie=${cookies.includes('__session')}`);
+            await c.close(); return ok;
+          }
+          const first = await attempt('FIRST_USE');
+          const second = await attempt('SECOND_USE');
+          console.log(`RESULT first=${first} reuse_refused=${!second}`);
+          await b.close();
+          JS
+          node s.mjs
